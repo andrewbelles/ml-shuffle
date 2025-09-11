@@ -14,9 +14,7 @@ pub const RETRY_BASE_BACKOFF: u64 = 250;
 pub const RETRY_JITTER: bool = true;
 pub const RETRYABLE_STATUSES: [u16; 5] = [429, 500, 502, 503, 504];
 
-///
 /// Wrapper over env::var to return an invalid enviroment var error
-///
 fn env_check(s: &str) -> Result<String, errors::CrawlerError> {
     match std::env::var(s) {
         Ok(v) if !v.trim().is_empty() => Ok(v),
@@ -24,9 +22,7 @@ fn env_check(s: &str) -> Result<String, errors::CrawlerError> {
     }
 }
 
-///
 /// Ensures that url is https 
-///
 fn ensure_https(url: &Url) -> Result<(), String> {
     if url.scheme() == "https" {
         Ok(())
@@ -45,13 +41,7 @@ fn ensure_host(url: &Url, expected_host: &str) -> Result<(), String> {
     }
 }
 
-
-
-/// Subtypes for AppConfig 
-
-/// 
 /// Configuration for Identity expected by musicbrainz 
-///
 #[derive(Debug, Clone)]
 pub enum AppEnv{ Dev, Staging, Prod }
 
@@ -70,9 +60,7 @@ fn build_identity() -> Result<IdentityConfig, errors::CrawlerError> {
     Ok( IdentityConfig { app_env, mb_user_agent } )
 }
 
-/// 
 /// Configuration that Spotify expects when hitting endpoints 
-///
 #[derive(Debug, Clone)]
 pub struct SpotifyConfig {
     pub client_id: String, 
@@ -136,7 +124,7 @@ pub struct MusicBrainzConfig {
 fn build_musicbrainz(identity: &IdentityConfig) -> 
     Result<MusicBrainzConfig, errors::CrawlerError> {
         
-    let env_u32 = |s: &str, default: u32| -> u32 {
+    let env_to_uint = |s: &str, default: u32| -> u32 {
         match std::env::var(s) {
             Ok(s) => {
                 match s.parse::<u32>() {
@@ -150,7 +138,7 @@ fn build_musicbrainz(identity: &IdentityConfig) ->
         } 
     };
 
-    let env_f32 = |s: &str, default: f32| -> f32 {
+    let env_to_float = |s: &str, default: f32| -> f32 {
         match std::env::var(s) {
             Ok(s) => {
                 match s.parse::<f32>() {
@@ -190,10 +178,10 @@ fn build_musicbrainz(identity: &IdentityConfig) ->
     // set values to either env specified or default values 
     let inc_recording = std::env::var("MB_INC_RECORDING")
         .unwrap_or_else(|_| "artist-credits+isrcs+releases".to_string());
-    let search_limit  = env_u32("MB_SEARCH_LIMIT", 5);
-    let search_offset = env_u32("MB_SEARCH_OFFSET", 0);
-    let max_rps       = env_f32("MB_MAX_RPS", 1.0);
-    let duration_tol  = env_u32("MB_SEARCH_DURATION_TOL", 1500);
+    let search_limit  = env_to_uint("MB_SEARCH_LIMIT", 5);
+    let search_offset = env_to_uint("MB_SEARCH_OFFSET", 0);
+    let max_rps       = env_to_float("MB_MAX_RPS", 1.0);
+    let duration_tol  = env_to_uint("MB_SEARCH_DURATION_TOL", 1500);
 
     Ok( MusicBrainzConfig {
         base_url,

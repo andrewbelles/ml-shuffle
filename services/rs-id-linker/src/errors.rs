@@ -17,3 +17,11 @@ pub enum CrawlerError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error)
 }
+
+impl From<reqwest::Error> for CrawlerError {
+    fn from(e: reqwest::Error) -> Self { CrawlerError::Http(e.to_string()) }
+}
+
+impl From<serde_json::Error> for CrawlerError {
+    fn from(e: serde_json::Error) -> Self { CrawlerError::Parse(e.to_string()) }
+}
