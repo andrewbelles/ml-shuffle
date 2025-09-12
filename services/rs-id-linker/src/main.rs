@@ -25,8 +25,6 @@ async fn main() -> Result<(), errors::CrawlerError> {
     )?;
     let acoust     = fetch::AcoustIdClient::new(&cfgs.http, &cfgs.acoustid)?;
 
-
-
     Ok(())
 }
 
@@ -38,9 +36,18 @@ async fn main() -> Result<(), errors::CrawlerError> {
 mod tests {
     use super::*;
 
+    fn live() -> bool {
+        std::env::var("LIVE_HTTP").ok().as_deref() == Some("1")
+    } 
+
     #[tokio::test]
     #[allow(dead_code)]
     async fn spotify_client_testbench() -> Result<(), errors::CrawlerError> {
+        dotenvy::dotenv().ok();
+        if !live() {
+            eprintln!("Set LIVE_HTTP=1 to run");
+            return Ok(())
+        }
         
         let cfgs = config::load_config()?;
         let spotify = fetch::SpotifyClient::new(&cfgs.http, &cfgs.spotify)?;
@@ -72,6 +79,12 @@ mod tests {
     #[tokio::test]
     #[allow(dead_code)]
     async fn musicbrainz_client_testbench() -> Result<(), errors::CrawlerError> {
+
+        if !live() {
+            eprintln!("Set LIVE_HTTP=1 to run");
+            return Ok(())
+        }
+
         let cfgs = config::load_config()?;
         let musicbrainz = fetch::MusicBrainzClient::new(
             &cfgs.http, &cfgs.identity, &cfgs.musicbrainz)?;
