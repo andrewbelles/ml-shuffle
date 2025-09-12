@@ -2,7 +2,7 @@
   description = "ml-shuffle dev/build env for full project. Restricted to linux systems";
 
   inputs = {
-    nixpkgs.url      = "github:NixOS/nixpkgs/nixos-24.05";
+    nixpkgs.url      = "github:NixOS/nixpkgs/nixos-25.05";
     flake-utils.url  = "github:numtide/flake-utils";
     rust-overlay.url = "github:oxalica/rust-overlay";
     crane.url        = "github:ipetkov/crane";
@@ -17,7 +17,7 @@
         };
 
         rustToolchain = pkgs.rust-bin.stable.latest.default; 
-        craneLib = crane.lib.${system};
+        craneLib = crane.mkLib pkgs;
 
         rsIdLinkerSrc = craneLib.cleanCargoSource (
           craneLib.path ./services/rs-id-linker
