@@ -2,13 +2,13 @@
   description = "ml-shuffle dev/build env for full project. Restricted to linux systems";
 
   inputs = {
-    nixpkgs.url      = "github:NixOs/nixpkgs/nixos-24.05";
+    nixpkgs.url      = "github:NixOS/nixpkgs/nixos-24.05";
     flake-utils.url  = "github:numtide/flake-utils";
     rust-overlay.url = "github:oxalica/rust-overlay";
     crane.url        = "github:ipetkov/crane";
   };
 
-  output = { self, nixpkgs, flake-utils, rust-overlay, crane, ... }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay, crane, ... }:
     flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
       let
         pkgs = import nixpkgs {
@@ -66,7 +66,7 @@
 
         packages.default = self.packages.${system}.rs-id-linker; 
 
-        app.rs-id-linker = {
+        apps.rs-id-linker = {
           type    = "app";
           program = "${self.packages.${system}.rs-id-linker}/bin/rs-id-linker"; 
         };
