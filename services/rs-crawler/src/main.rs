@@ -36,7 +36,6 @@ async fn main() -> Result<(), CrawlerError> {
         &cfgs.identity, 
         &cfgs.musicbrainz
     )?;
-    let acoust     = fetch::AcoustIdClient::new(&cfgs.http, &cfgs.acoustid)?;
 
     Ok(())
 }
@@ -46,7 +45,6 @@ async fn main() -> Result<(), CrawlerError> {
 #[cfg(test)]
 mod tests {
     use crate::CrawlerError;
-
     use super::*;
 
     fn live() -> bool {
@@ -196,6 +194,131 @@ mod tests {
         )?;
 
         println!("wrote raw data to {}", path.display());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[allow(dead_code)]
+    async fn track_pipeline_testbench() -> Result<(), CrawlerError> {
+        dotenvy::dotenv().ok();
+        if !live() {
+            eprintln!("Set LIVE_HTTP=1 to run");
+            return Ok(())
+        }
+
+        let cfgs = config::load_config()?; 
+        let spotify = fetch::SpotifyClient::new(
+            &cfgs.http, &cfgs.spotify)?; 
+        let musicb  = fetch::MusicBrainzClient::new(
+            &cfgs.http, &cfgs.identity, &cfgs.musicbrainz)?;
+        let acoustb = fetch::AcousticBrainzClient::new(
+            &cfgs.http, &cfgs.identity, &cfgs.acousticbrainz)?;
+        let lastfm  = fetch::LastFmClient::new(
+            &cfgs.http, &cfgs.lastfm)?; 
+
+        let token_response = spotify.token_request()
+            .basic_auth(&cfgs.spotify.client_id, Some(&cfgs.spotify.client_secret))
+            .send()
+            .await?; 
+
+        assert!(token_response.status().is_success(), 
+            "spotify token status: {}", token_response.status());
+
+        let token: serde_json::Value = token_response.json().await?; 
+        let bearer = token["access_token"].as_str().expect("spotify access_token missing");
+
+        let track_id = "6GtOsEzNUhJghrIf6UTbRV";
+        let track_response = spotify.track(track_id, bearer).send().await?; 
+
+        assert!(track_response.status().is_success(), 
+            "spotify track status: {}", track_response.status());
+
+        let track: serde_json::Value = track_response.json().await?; 
+        println!("spotify.track:\n{}", serde_json::to_string_pretty(&track)?);
+
+        let isrc = track.pointer("/external_ids/isrc")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| CrawlerError::Parse(
+                    "spotify track missing external_ids".into())
+            )?.to_string(); 
+        
+        let track_title = track.get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(); 
+
+        let artists_array = track.get("artists")
+            .and_then(|v| v.as_array())
+            .unwrap();
+
+        let first_artist = artists_array.first() 
+            .and_then(|a| a.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        // Hit MusicBrainz to get MBID from ISRC 
+
+        let mb_response = musicb.lookup_isrc(&isrc).send().await?; 
+        assert!(mb_response.status().is_success(), 
+            "musicbrainz isrc status: {}", mb_response.status()); 
+
+        let mb: serde_json::Value = mb_response.json().await?; 
+        println!("musicbrainz.isrc:\n{}", serde_json::to_string_pretty(&mb)?);
+
+        let mbid = mb.get("recordings")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.iter()
+                .find_map(|r| r.get("id").and_then(|v| v.as_str())))
+            .ok_or_else(|| CrawlerError::Parse(
+                "no recordings found for ISRC".into()
+            ))?.to_string();
+
+        println!("resolved MBID: {mbid}");
+
+        let acoust_response = acoustb.features(&mbid, "high-level")
+            .send()
+            .await?; 
+        assert!(acoust_response.status().is_success(), 
+            "acousticbrainz high-level status: {}", acoust_response.status());
+        let acoust_high: serde_json::Value = acoust_response.json().await?; 
+        println!("acousticbrainz.high-level:\n{}", 
+            serde_json::to_string_pretty(&acoust_high)?);
+
+        let acoust_response = acoustb.features(&mbid, "low-level")
+            .send()
+            .await?; 
+        assert!(acoust_response.status().is_success(), 
+            "acousticbrainz low-level status: {}", acoust_response.status());
+        let acoust_low: serde_json::Value = acoust_response.json().await?; 
+        println!("acousticbrainz.low-level:\n{}", 
+            serde_json::to_string_pretty(&acoust_low)?);
+
+        let lastfm_response = lastfm.track_top_tags_by_mbid(&mbid)
+            .send()
+            .await?; 
+        let mut tags: Option<serde_json::Value> = None; 
+        if lastfm_response.status().is_success() {
+            let v: serde_json::Value = lastfm_response.json().await?; 
+            if v.get("toptags").is_some() {
+                tags = Some(v);
+            }
+        }
+
+        if tags.is_none() {
+            let lastfm_response = lastfm.track_top_tags(&first_artist, &track_title)
+                .send()
+                .await?; 
+            assert!(lastfm_response.status().is_success(),
+                "last.fm toptags: {}", lastfm_response.status());
+            tags = Some(lastfm_response.json().await?);
+        }
+
+        let tags = tags.expect("no last.fm toptags found");
+        println!("lastfm.toptags:\n{}", serde_json::to_string_pretty(&tags)?);
+        assert!(tags.get("toptags").is_some(), 
+            "expected toptags key in response");
 
         Ok(())
     }

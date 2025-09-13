@@ -146,6 +146,40 @@ impl Persistent {
         ).execute(pool).await?; 
 
         sqlx::query(
+        r"
+        CREATE TABLE IF NOT EXISTS raw_files (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          track_id    TEXT NOT NULL,
+          source      TEXT NOT NULL,
+          subtype     TEXT NOT NULL,
+          key         TEXT NOT NULL,
+          rel_path    TEXT NOT NULL,
+          created_at  INTEGER NOT NULL,
+          UNIQUE (source, subtype, key)
+        );"
+        ).execute(pool).await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_raw_files_track ON raw_files(track_id);")
+            .execute(pool).await?;
+
+        sqlx::query(
+        r"
+        CREATE TABLE IF NOT EXISTS features (
+          track_id    TEXT NOT NULL,
+          source      TEXT NOT NULL,
+          feature     TEXT NOT NULL,
+          dtype       TEXT NOT NULL CHECK (dtype IN ('num','text')),
+          num_value   REAL,
+          text_value  TEXT,
+          updated_at  INTEGER NOT NULL,
+          PRIMARY KEY (track_id, source, feature)
+        );"
+        ).execute(pool).await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_features_track ON features(track_id);")
+            .execute(pool).await?;
+
+        sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_jobs_pending ON jobs(kind, status);"
         ).execute(pool).await?;
 
@@ -455,6 +489,80 @@ impl Persistent {
             updated_at: r.get("updated_at")
         }))
     }
+
+    pub async fn index_raw_file(
+        &self, track_id: &str, source: &str, subtype: &str, key: &str, rel_path: &str
+    ) -> Result<(), CrawlerError> {
+        sqlx::query(r"
+            INSERT OR IGNORE INTO raw_files(
+                track_id, source, subtype, key, rel_path, created_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6);")
+        .bind(track_id)
+        .bind(source)
+        .bind(subtype)
+        .bind(key)
+        .bind(rel_path)
+        .bind(Self::now())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_features_num(
+        &self,
+        track_id: &str,
+        source: &str,
+        items: &[(String, f64)],
+    ) -> Result<(), CrawlerError> {
+        let mut tx = self.pool.begin().await?;
+        for (feature, value) in items {
+            sqlx::query(r"
+                INSERT INTO features (
+                    track_id, source, feature, dtype, num_value, text_value, updated_at
+                )
+                VALUES (?1, ?2, ?3, 'num', ?4, NULL, ?5)
+                ON CONFLICT(track_id, source, feature) DO UPDATE SET
+                    dtype='num', num_value=excluded.num_value, text_value=NULL, 
+                    updated_at=excluded.updated_at;")
+            .bind(track_id)
+            .bind(source)
+            .bind(feature)
+            .bind(value)
+            .bind(Self::now())
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Batch upsert text features (transactional)
+    pub async fn upsert_features_text(
+        &self,
+        track_id: &str,
+        source: &str,
+        items: &[(String, String)],
+    ) -> Result<(), CrawlerError> {
+        let mut tx = self.pool.begin().await?;
+        for (feature, value) in items {
+            sqlx::query(r"
+                INSERT INTO features (
+                    track_id, source, feature, dtype, num_value, text_value, updated_at
+                )
+                VALUES (?1, ?2, ?3, 'text', NULL, ?4, ?5)
+                ON CONFLICT(track_id, source, feature) DO UPDATE SET
+                    dtype='text', num_value=NULL, text_value=excluded.text_value,
+                    updated_at=excluded.updated_at;")
+            .bind(track_id)
+            .bind(source)
+            .bind(feature)
+            .bind(value)
+            .bind(Self::now())
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
 }
-
-

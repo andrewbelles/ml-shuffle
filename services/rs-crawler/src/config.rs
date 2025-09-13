@@ -24,7 +24,7 @@ fn env_check(s: &str) -> Result<String, CrawlerError> {
 }
 
 /// Ensures that url is https 
-fn ensure_https(url: &Url) -> Result<(), String> {
+pub fn ensure_https(url: &Url) -> Result<(), String> {
     if url.scheme() == "https" {
         Ok(())
     } else {
@@ -32,7 +32,7 @@ fn ensure_https(url: &Url) -> Result<(), String> {
     }
 }
 
-fn ensure_host(url: &Url, expected_host: &str) -> Result<(), String> {
+pub fn ensure_host(url: &Url, expected_host: &str) -> Result<(), String> {
     match url.host_str() {
         Some(h) if h.eq_ignore_ascii_case(expected_host) => Ok(()),
         Some(h) => Err(
@@ -438,43 +438,67 @@ impl Default for LoggingConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AcousticBrainzConfig {
-    pub base_url: String 
+    pub base_url: Url 
 }
 
-impl Default for AcousticBrainzConfig {
-    fn default() -> Self {
-        Self {
-            base_url: "https://acousticbrainz.org/".to_string(), 
-        }
-    }
+fn build_acousticbrainz() -> Result<AcousticBrainzConfig, CrawlerError> {
+    let base_url = "https://acousticbrainz.org/";
+    let base_url = Url::parse(&base_url)
+        .map_err(|e| CrawlerError::Config(
+            format!("ACOUSTICBRAINZ invalid {e}")
+        ))?;
+
+    ensure_https(&base_url)
+        .map_err(CrawlerError::Config)?;
+
+    Ok( AcousticBrainzConfig {
+            base_url, 
+    })
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct LastFmConfig {
-    pub base_url: String, 
+    pub base_url: Url, 
     pub api_key: String
 }
 
 fn build_lastfm() -> Result<LastFmConfig, CrawlerError> {
     let api_key = env_check("LASTFM_API_KEY")?;
 
+    let base_url = "https://ws.audioscrobbler.com/2.0/";
+    let base_url = Url::parse(&base_url)
+        .map_err(|e| CrawlerError::Config(
+            format!("LASTFM invalid {e}")
+        ))?;
+
+    ensure_https(&base_url)
+        .map_err(CrawlerError::Config)?;
+
     Ok(LastFmConfig {
-        base_url: "https://ws.audioscrobbler.com/2.0/".to_string(),
+        base_url,
         api_key
     })
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct DiscogsConfig {
-    pub base_url: String, 
+    pub base_url: Url, 
     pub api_key: String
 }
 
 fn build_discogs() -> Result<DiscogsConfig, CrawlerError> {
     let api_key = env_check("DISCOGS_API_KEY")?;
+    let base_url = "https://api.discogs.com/";
+    let base_url = Url::parse(&base_url)
+        .map_err(|e| CrawlerError::Config(
+            format!("DISCOGS_URL invalid {e}")
+        ))?;
+
+    ensure_https(&base_url)
+        .map_err(CrawlerError::Config)?;
 
     Ok(DiscogsConfig {
-        base_url: "https://api.discogs.com/".to_string(),
+        base_url,
         api_key
     })
 }
@@ -507,7 +531,7 @@ pub fn load_config() -> Result<AppConfig, CrawlerError> {
 
     let identity    = build_identity()?; 
     let spotify     = build_spotify()?;
-    let acousticbrainz = AcousticBrainzConfig::default(); 
+    let acousticbrainz = build_acousticbrainz()?; 
     let lastfm      = build_lastfm()?; 
     let discogs     = build_discogs()?; 
     let musicbrainz = build_musicbrainz(&identity)?;

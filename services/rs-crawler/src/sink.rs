@@ -1,9 +1,9 @@
 //! 
 //! src/sink.rs  Andrew Belles  Sept 13th, 2025 
 //!
-//! Defines methods for conversion of json into zstd compressed
+//! Defines methods for conversion of raw data 
+//! to compressed json. Provides functions to index features 
 //!  
-//!
 //!
 
 use std::{fs, path::{Path, PathBuf}};
@@ -14,7 +14,10 @@ use crate::errors::CrawlerError;
 #[derive(Debug, Clone, Copy)]
 pub enum RawType {
     SpotifyTrack, 
-    // TODO: More for features 
+    MusicBrainzRecording,  
+    ABHighLevel, 
+    ABLowLevel, 
+    LastFmTopTags 
 }
 
 pub struct DiskZstdSink {
@@ -32,7 +35,6 @@ impl DiskZstdSink {
 
         match kind {
             RawType::SpotifyTrack => Self::prune_spotify_track(&mut json),
-            // TODO: Other prune funcs for features, etc. 
         }
 
         let rpath = Self::rel_path(kind, Self::sanitize_key(key));
@@ -73,14 +75,20 @@ impl DiskZstdSink {
         Ok(path)
     }
 
-    fn rel_path(kind: RawType, sanitize_key: String) -> PathBuf {
+    fn rel_path(kind: RawType, key: String) -> PathBuf {
+        let end = format!("{key}.json.zst");
         match kind {
             RawType::SpotifyTrack => 
-                PathBuf::from("raw/spotify/track").join(
-                    format!("{sanitize_key}.json.zst")
-                ),
-            // TODO: Other relative paths for features, etc. 
-        }
+                ["raw","spotify","track", &end],
+            RawType::MusicBrainzRecording => 
+                ["raw", "musicbrainz","recording", &end],
+            RawType::ABHighLevel => 
+                ["raw", "acousticbrainz", "high-level", &end],
+            RawType::ABLowLevel => 
+                ["raw", "acousticbrainz", "low-level", &end],
+            RawType::LastFmTopTags => 
+                ["raw", "lastfm", "toptags", &end],
+        }.into_iter().collect()
     }
 
     fn sanitize_key(key: &str) -> String {
@@ -180,5 +188,117 @@ impl DiskZstdSink {
         }
 
         *v = Value::Object(root);
+    }
+
+    pub fn extract_high_level(v: &serde_json::Value) -> 
+        (Vec<(String, f64)>, Vec<(String, String)>) {
+        let mut nums: Vec<(String, f64)> = Vec::new();
+        let mut texts: Vec<(String, String)> = Vec::new();
+
+        let Some(object) = v.get("highlevel").and_then(|x| x.as_object()) else {
+            return (nums, texts);
+        };
+
+        for (classifier, node) in object {
+            if let Some(value) = node.get("value").and_then(|x| x.as_str()) {
+                let key = Self::sanitize_key(&format!(
+                        "ab.highlevel.{classifier}.value")
+                );
+                texts.push((key, value.to_string()));
+            }
+            if let Some(all) = node.get("all").and_then(|x| x.as_object()) {
+                for (label, p) in all {
+                    if let Some(prob) = p.as_f64() {
+                        let key = Self::sanitize_key(&format!(
+                            "ab.highlevel.{classifier}.all.{label}"
+                        ));
+                        nums.push((key, prob));
+                    }
+                }
+            }
+        }
+
+        (nums, texts)
+    }
+
+    // Walk through lowlevel features and extract 
+    fn extract_low_level_helper(
+        prefix: &str, 
+        v: &Value, 
+        out: &mut Vec<(String, f64)>
+    ) {
+        match v {
+            Value::Number(n) => {
+                if let Some(x) = n.as_f64() {
+                    let key = Self::sanitize_key(prefix);
+                    out.push((key, x));
+                }
+            },
+            Value::Bool(b) => {
+                let key = Self::sanitize_key(prefix);
+                out.push((key, if *b {1.0} else {0.0}));
+            },
+            Value::Array(arr) => {
+                for (i, element) in arr.iter().enumerate() {
+                    let key = format!("{prefix}.{i:02}");
+                    Self::extract_low_level_helper(&key, element, out);
+                }
+            },
+            Value::Object(map) => {
+                for (key, value) in map {
+                    let key = if prefix.is_empty() {
+                        format!("ab.lowlevel.{key}")
+                    } else {
+                        format!("{prefix}.{key}")
+                    };
+                    Self::extract_low_level_helper(&key, value, out);
+                }
+            },
+            _ => {}
+        }
+    }
+
+    pub fn extract_low_level(v: &Value) -> Vec<(String, f64)> {
+        let mut out: Vec<(String, f64)> = Vec::new(); 
+        let Some(root) = v.get("lowlevel") else {
+            return out; 
+        };
+
+        // Call to recursive helper 
+        Self::extract_low_level_helper("", root, &mut out);
+        out 
+    }
+
+    pub fn extract_toptags(v: &Value) -> Vec<(String, f64)> {
+        let mut out: Vec<(String, f64)> = Vec::new(); 
+        let Some(tags) = v.pointer("/toptags/tag").and_then(|x| x.as_array()) else {
+            return out; 
+        };
+
+        let mut sum: f64 = 0.0; 
+        let mut temp: Vec<(String, f64)> = Vec::with_capacity(tags.len());
+
+        for tag in tags {
+            let Some(name) = tag.get("name").and_then(|x| x.as_str()) else {
+                continue; 
+            };
+            let count = tag.get("count")
+                .and_then(|x| x.as_str().and_then(|s| s.parse::<f64>().ok())
+                .or_else(|| x.as_f64()))
+                .unwrap_or(0.0);
+            
+            let tag_key = Self::sanitize_key(&format!("lastfm.toptags.{name}.count"));
+            temp.push((tag_key, count));
+            sum += count; 
+        }
+
+        out.extend(temp.iter().cloned());
+        if sum > 0.0 {
+            for (key, count) in &temp {
+                let per = key.replace(".count", ".p");
+                out.push((per, *count / sum));
+            }
+        }
+        out 
     }
 }
