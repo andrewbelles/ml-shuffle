@@ -1,5 +1,13 @@
+//! 
+//! src/sink.rs  Andrew Belles  Sept 13th, 2025 
+//!
+//! Defines methods for conversion of json into zstd compressed
+//!  
+//!
+//!
+
 use std::{fs, path::{Path, PathBuf}};
-use serde_json::Value; 
+use serde_json::{Map, Value}; 
 
 use crate::errors::CrawlerError; 
 
@@ -87,97 +95,90 @@ impl DiskZstdSink {
             .collect()
     }
 
-    /// Drops keys that we do not to store/handle 
+    /// Whitelists fields that should be written to json 
     fn prune_spotify_track(v: &mut Value) {
-        Self::drop_key(v, "available_markets");
-        Self::drop_key(v, "preview_url");
-        Self::drop_key(v, "href");
-        Self::drop_key(v, "uri");
-        Self::drop_key(v, "type");
-        Self::drop_key(v, "is_local");
-        Self::drop_key(v, "disc_number");
-        Self::drop_key(v, "track_number");
-
-        Self::drop_path(v, &["album", "available_markets"]);
-        Self::drop_path(v, &["album", "external_urls"]);
-        Self::drop_path(v, &["album", "images"]);
-        Self::drop_path(v, &["album", "album_type"]);
-        Self::drop_path(v, &["album", "total_tracks"]);
-        Self::drop_path(v, &["album", "release_date_precision"]);
-
-        Self::drop_path(v, &["album", "artists"]);
+        let s = |p: &str| v.pointer(p)
+            .and_then(Value::as_str)
+            .map(|x| x.to_string());
         
-        Self::drop_keys_recursive(v, 
-            &["href", "uri", "type", "external_urls"]);
-    }
+        let v_i64 = |p: &str| v.pointer(p)
+            .and_then(Value::as_i64);
 
-    fn drop_key(v: &mut Value, key: &str) {
-        if let Some(object) = v.as_object_mut() {
-            object.remove(key);
+        let v_b = |p: &str| v.pointer(p)
+            .and_then(Value::as_bool);
+    
+        let mut album = Map::new(); 
+        
+        if let Some(x) = s("/album/id") {
+            album.insert("id".into(), Value::String(x)); 
         }
-    }
 
-    fn drop_path(v: &mut Value, path: &[&str]) {
-        if path.is_empty() {
-            return; 
-        } 
+        if let Some(x) = s("/album/name") {
+            album.insert("name".into(), Value::String(x));
+        }
 
-        let (last_key, parents) = path.split_last().unwrap();
-        let mut curr = v; 
-        for segment in parents {
-            match curr {
-                Value::Object(map) => {
-                    if !map.contains_key(*segment) {
-                        return; 
+        if let Some(x) = s("/album/release_date") {
+            album.insert("release_date".into(), Value::String(x));
+        }
+
+        let artists = v.get("artists")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter().filter_map(|a| {
+                    let mut obj = Map::new(); 
+                    if let Some(id) = a.get("id")
+                        .and_then(Value::as_str) {
+                        obj.insert(
+                            "id".into(), Value::String(id.to_string())
+                        );
                     }
-                    curr = map.get_mut(*segment).unwrap();
-                }
-                _ => return, 
-            }
-        }
-        if let Value::Object(map) = curr {
-            map.remove(*last_key);
-        }
-    }
-
-    fn drop_array_obj_key(v: &mut Value, arr_path: &[&str], child_key: &str) {
-        let mut curr = v; 
-        for segment in arr_path {
-            match curr {
-                Value::Object(map) => {
-                    if !map.contains_key(*segment) {
-                        return; 
+                    if let Some(name) = a.get("name") 
+                        .and_then(Value::as_str) {
+                        obj.insert(
+                            "name".into(), Value::String(name.to_string())
+                        );
                     }
-                    curr = map.get_mut(*segment).unwrap(); 
-                },
-                _ => return, 
-            }
-        }
-        if let Value::Array(arr) = curr {
-            for element in arr {
-                if let Value::Object(object) = element {
-                    object.remove(child_key);
-                }
-            }
-        }
-    }
+                    if obj.is_empty() {
+                        None 
+                    } else {
+                        Some(Value::Object(obj))
+                    }
+                }).collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
 
-    fn drop_keys_recursive(v: &mut Value, keys: &[&str]) {
-        match v {
-            Value::Object(map) => {
-                for key in keys {
-                    map.remove(*key);
-                }
-                for val in map.values_mut() {
-                    Self::drop_keys_recursive(val, keys);
-                }
-            }
-            Value::Array(arr) => {
-                for element in arr {
-                    Self::drop_keys_recursive(element, keys);
-                }
-            }
-            _ => {}
+        let ext_isrc = s("/external_ids/isrc");
+        let mut root = Map::new(); 
+        if let Some(x) = v.get("id").and_then(Value::as_str) {
+            root.insert("id".into(), Value::String(x.to_string()));
         }
+        if let Some(x) = v.get("name").and_then(Value::as_str) {
+            root.insert("name".into(), Value::String(x.to_string()));
+        }
+        if let Some(x) = v_i64("/duration_ms") {
+            root.insert("duration_ms".into(), Value::Number(x.into()));
+        }
+        if let Some(x) = v_b("/explicit") {
+            root.insert("explicit".into(), Value::Bool(x));
+        }
+        if let Some(x) = v.get("popularity").and_then(Value::as_i64) {
+            root.insert("popularity".into(), Value::Number(x.into()));
+        }
+
+        if !album.is_empty() {
+            root.insert("album".into(), Value::Object(album));
+        }
+
+        if !artists.is_empty() {
+            root.insert("artists".into(), Value::Array(artists));
+        }
+
+        if let Some(isrc) = ext_isrc {
+            let mut ext = Map::new(); 
+            ext.insert("isrc".into(), Value::String(isrc));
+            root.insert("external_ids".into(), Value::Object(ext));
+        }
+
+        *v = Value::Object(root);
     }
 }

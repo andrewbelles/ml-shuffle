@@ -1,12 +1,13 @@
-// fetch.rs  Andrew Belles  Sept 10th, 2025 
-//
-// Defines methods for hitting specified endpoints and returning unparsed data
-// Handles retries, etc. 
-//
+//!
+//! src/fetch.rs  Andrew Belles  Sept 10th, 2025 
+//!
+//! Defines methods for hitting specified endpoints and 
+//! returning unparsed data, handling retries, etc. 
+//!
 
 use url::Url;
 use reqwest::{Client, header, redirect, RequestBuilder};
-use crate::config::{HttpConfig, IdentityConfig, MusicBrainzConfig, SpotifyConfig, AcoustIdConfig}; 
+use crate::config::{HttpConfig, IdentityConfig, MusicBrainzConfig, SpotifyConfig}; 
 use crate::errors; 
 
 /// Client building functionality 
@@ -163,37 +164,5 @@ impl MusicBrainzClient {
         let mut url = self.base.join(&format!("release/{mbid}")).unwrap();
         url.set_query(Some(&format!("fmt=json&inc={inc}")));
         self.http.get(url)
-    }
-}
-
-
-#[derive(Clone, Debug)]
-pub struct AcoustIdClient {
-    pub http: Client, 
-    pub cfg: AcoustIdConfig 
-}
-
-impl AcoustIdClient {
-    pub fn new(http_config: &HttpConfig, cfg: &AcoustIdConfig) -> 
-        Result<Self, errors::CrawlerError> {
-
-        let http = base_client(http_config)?;
-        Ok( Self {
-            http, 
-            cfg: cfg.clone()
-        })
-    } 
-
-    /// GET /v2/lookup?client=KEY&fingerprint=...&duration=...&
-    pub fn lookup(&self, fingerprint: &str, duration_secs: u32, meta: Option<&str>) ->
-        reqwest::RequestBuilder {
-        let url = self.cfg.base_url.join("lookup").unwrap();
-        let meta = meta.unwrap_or(&self.cfg.meta);
-        self.http.get(url).query(&[
-            ("client", self.cfg.api_key.as_str()),
-            ("fingerprint", fingerprint), 
-            ("duration", &duration_secs.to_string()),
-            ("meta", meta)
-        ])
     }
 }

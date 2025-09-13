@@ -1,6 +1,9 @@
+//! 
 //! src/persistent.rs  Andrew Belles  Sept 12th, 2025  
 //! 
 //! Defines module for persisting raw data to memory 
+//! We define the memory as an sqlite database for features 
+//! and raw json for tracks (methods defined in src/sink.rs)
 //!
 
 use std::str::FromStr;

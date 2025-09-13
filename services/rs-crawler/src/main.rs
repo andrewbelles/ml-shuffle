@@ -1,3 +1,12 @@
+//!
+//! src/main.rs  Andrew Belles  Sept 13, 2025 
+//! 
+//! Main source file of unit tests for modules as well as 
+//! calls to all handlers etc. that define the crawler 
+//!
+//!
+
+
 mod config; 
 mod errors; 
 mod logging; 

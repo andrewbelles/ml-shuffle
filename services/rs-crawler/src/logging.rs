@@ -1,3 +1,10 @@
+//! 
+//! src/logging.rs  Andrew Belles  Sept 13th, 2025 
+//!
+//! Initializes logger, includes methods for calling logger 
+//! and ensuring that crawler gives informative outputs while running 
+//!
+//!
 
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 use tracing_error::ErrorLayer; 

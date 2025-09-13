@@ -1,3 +1,11 @@
+//!
+//! src/errors.rs  Andrew Belles  Sept 13th, 2025 
+//!
+//! Defines enums and methods of error conversion 
+//! for errors the crawler uses 
+//!
+//!
+
 use thiserror::Error; 
 
 #[derive(Error, Debug)]

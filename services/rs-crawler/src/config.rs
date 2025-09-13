@@ -1,6 +1,7 @@
+use serde::Deserialize;
 use url::Url; 
 use std::time; 
-use crate::errors; 
+use crate::CrawlerError; 
 
 /// Constants for HTTP Config  
 pub const HTTP_TIMEOUT: u64 = 8000;
@@ -15,10 +16,10 @@ pub const RETRY_JITTER: bool = true;
 pub const RETRYABLE_STATUSES: [u16; 5] = [429, 500, 502, 503, 504];
 
 /// Wrapper over env::var to return an invalid enviroment var error
-fn env_check(s: &str) -> Result<String, errors::CrawlerError> {
+fn env_check(s: &str) -> Result<String, CrawlerError> {
     match std::env::var(s) {
         Ok(v) if !v.trim().is_empty() => Ok(v),
-        _ => Err(errors::CrawlerError::Config(format!("{s} was not set"))),
+        _ => Err(CrawlerError::Config(format!("{s} was not set"))),
     }
 }
 
@@ -51,7 +52,7 @@ pub struct IdentityConfig {
     pub mb_user_agent: String,
 }
 
-fn build_identity() -> Result<IdentityConfig, errors::CrawlerError> {
+fn build_identity() -> Result<IdentityConfig, CrawlerError> {
     let application   = env_check("APPLICATION")?; 
     let header        = env_check("MUSIC_BRAINZ_HEADER")?;
     let mb_user_agent = format!("{application} {header}");
@@ -69,7 +70,7 @@ pub struct SpotifyConfig {
     pub api_base: Url, 
 }
 
-fn build_spotify() -> Result<SpotifyConfig, errors::CrawlerError> {
+fn build_spotify() -> Result<SpotifyConfig, CrawlerError> {
     let client_id     = env_check("SPOTIFY_CLIENT_ID")?;
     let client_secret = env_check("SPOTIFY_CLIENT_SECRET")?;
 
@@ -81,22 +82,22 @@ fn build_spotify() -> Result<SpotifyConfig, errors::CrawlerError> {
         .unwrap_or_else(|_| "https://api.spotify.com/v1/".to_string());
 
     let token_url = Url::parse(&token_url)
-        .map_err(|_| errors::CrawlerError::Config(
+        .map_err(|_| CrawlerError::Config(
                 format!("SPOTIFY_TOKEN_URL invalid")
         ))?;
 
     let mut api_base  = Url::parse(&api_base)
-        .map_err(|_| errors::CrawlerError::Config(
+        .map_err(|_| CrawlerError::Config(
                 format!("SPOTIFY_API_BASE invalid")
         ))?;
 
     // ensure valid https and hostname for both urls 
-    ensure_https(&token_url).map_err(|e| errors::CrawlerError::Config(e))?;
-    ensure_https(&api_base).map_err(|e| errors::CrawlerError::Config(e))?;
+    ensure_https(&token_url).map_err(|e| CrawlerError::Config(e))?;
+    ensure_https(&api_base).map_err(|e| CrawlerError::Config(e))?;
     ensure_host(&token_url, "accounts.spotify.com")
-        .map_err(|e| errors::CrawlerError::Config(e))?;
+        .map_err(|e| CrawlerError::Config(e))?;
     ensure_host(&api_base, "api.spotify.com")
-        .map_err(|e| errors::CrawlerError::Config(e))?;
+        .map_err(|e| CrawlerError::Config(e))?;
 
     if !api_base.path().ends_with('/') {
         let mut path = api_base.path().to_string(); 
@@ -122,7 +123,7 @@ pub struct MusicBrainzConfig {
 }
 
 fn build_musicbrainz(identity: &IdentityConfig) -> 
-    Result<MusicBrainzConfig, errors::CrawlerError> {
+    Result<MusicBrainzConfig, CrawlerError> {
         
     let env_to_uint = |s: &str, default: u32| -> u32 {
         match std::env::var(s) {
@@ -158,15 +159,15 @@ fn build_musicbrainz(identity: &IdentityConfig) ->
 
     // get url
     let mut base_url = Url::parse(&base_url)
-        .map_err(|e| errors::CrawlerError::Config(
+        .map_err(|e| CrawlerError::Config(
                 format!("MB_BASE_URL invalid {e}")
         ))?;
 
     // https and hostname check 
     ensure_https(&base_url)
-        .map_err(errors::CrawlerError::Config)?;
+        .map_err(CrawlerError::Config)?;
     ensure_host(&base_url, "musicbrainz.org")
-        .map_err(errors::CrawlerError::Config)?;
+        .map_err(CrawlerError::Config)?;
 
     // ensure trailing slash
     if !base_url.path().ends_with('/') {
@@ -201,20 +202,20 @@ pub struct AcoustIdConfig {
     pub meta: String 
 }
 
-fn build_acoustid() -> Result<AcoustIdConfig, errors::CrawlerError> {
+fn build_acoustid() -> Result<AcoustIdConfig, CrawlerError> {
     let api_key = env_check("ACOUST_ID")?;
 
     let base_url = std::env::var("ACOUST_BASE_URL")
         .unwrap_or_else(|_| "https:/api.acoustid.org/v2/".to_string());
     let mut base_url = Url::parse(&base_url)
-        .map_err(|e| errors::CrawlerError::Config(
+        .map_err(|e| CrawlerError::Config(
             format!("ACOUST_BASE_URL invalid {e}")
         ))?;
 
     ensure_https(&base_url)
-        .map_err(errors::CrawlerError::Config)?;
+        .map_err(CrawlerError::Config)?;
     ensure_host(&base_url, "api.acoustid.org")
-        .map_err(errors::CrawlerError::Config)?;
+        .map_err(CrawlerError::Config)?;
 
     // ensure trailing slash
     if !base_url.path().ends_with('/') {
@@ -435,6 +436,49 @@ impl Default for LoggingConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct AcousticBrainzConfig {
+    pub base_url: String 
+}
+
+impl Default for AcousticBrainzConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "https://acousticbrainz.org/".to_string(), 
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LastFmConfig {
+    pub base_url: String, 
+    pub api_key: String
+}
+
+fn build_lastfm() -> Result<LastFmConfig, CrawlerError> {
+    let api_key = env_check("LASTFM_API_KEY")?;
+
+    Ok(LastFmConfig {
+        base_url: "https://ws.audioscrobbler.com/2.0/".to_string(),
+        api_key
+    })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DiscogsConfig {
+    pub base_url: String, 
+    pub api_key: String
+}
+
+fn build_discogs() -> Result<DiscogsConfig, CrawlerError> {
+    let api_key = env_check("DISCOGS_API_KEY")?;
+
+    Ok(DiscogsConfig {
+        base_url: "https://api.discogs.com/".to_string(),
+        api_key
+    })
+}
+
 
 ///
 /// AppConfig which holds all requests, etc. needed by fetch module 
@@ -443,8 +487,11 @@ impl Default for LoggingConfig {
 pub struct AppConfig {
     pub identity: IdentityConfig, 
     pub spotify: SpotifyConfig, 
+    pub acousticbrainz: AcousticBrainzConfig, 
+    pub lastfm: LastFmConfig, 
+    pub discogs: DiscogsConfig,
     pub musicbrainz: MusicBrainzConfig, 
-    pub acoustid: AcoustIdConfig, 
+    // pub acoustid: AcoustIdConfig, 
     pub http: HttpConfig, 
     pub persistence: PersistenceConfig, 
     pub matching: MatchingConfig, 
@@ -455,13 +502,16 @@ pub struct AppConfig {
 ///
 /// Return all environment variables to caller at program start. 
 ///
-pub fn load_config() -> Result<AppConfig, errors::CrawlerError> {
+pub fn load_config() -> Result<AppConfig, CrawlerError> {
     dotenvy::dotenv().ok();
 
     let identity    = build_identity()?; 
     let spotify     = build_spotify()?;
+    let acousticbrainz = AcousticBrainzConfig::default(); 
+    let lastfm      = build_lastfm()?; 
+    let discogs     = build_discogs()?; 
     let musicbrainz = build_musicbrainz(&identity)?;
-    let acoustid    = build_acoustid()?;
+    // let acoustid    = build_acoustid()?;
     let http        = HttpConfig::default(); 
     let persistence = PersistenceConfig::default();    
     let matching    = MatchingConfig::default(); 
@@ -469,7 +519,7 @@ pub fn load_config() -> Result<AppConfig, errors::CrawlerError> {
     let logging     = LoggingConfig::default(); 
 
     Ok( AppConfig { 
-        identity, spotify, musicbrainz, acoustid, 
+        identity, spotify, acousticbrainz, lastfm, discogs, musicbrainz, 
         http, persistence, matching, concurrency, logging
     } )
 }

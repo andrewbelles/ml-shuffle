@@ -1,5 +1,13 @@
+# 
+# Cargo.toml  Andrew Belles  Sept 13th, 2025 
+#
+# Defines packages and dependencies of music api crawler 
+# 
+# 
+# 
+
 [package]
-name = "rs-id-linker"
+name = "rs-crawler"
 version = "0.1.0"
 edition = "2024"
 

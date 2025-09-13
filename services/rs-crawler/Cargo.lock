@@ -1691,7 +1691,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rs-id-linker"
+name = "rs-crawler"
 version = "0.1.0"
 dependencies = [
  "chrono",
