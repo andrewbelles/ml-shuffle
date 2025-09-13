@@ -10,7 +10,7 @@ thiserror  = "1"
 dotenvy    = "0.15"
 uuid       = { version = "1", features = ["v4"] }
 chrono     = { version = "0.4", features = ["serde"] }
-reqwest    = { version = "0.11", features = ["json", "blocking"] }
+reqwest    = { version = "0.11", features = ["json", "blocking", "rustls-tls"] }
 scraper    = "0.12"
 tokio      = { version = "1", features = ["full"] }
 url        = "2.2"
@@ -18,3 +18,7 @@ tracing    = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json", "time"] }
 tracing-error      = "0.2"
 tracing-appender   = "0.2"
+
+sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
+zstd = "0.13"
+tempfile = "3"

@@ -6,6 +6,8 @@ NB: Spotify's Terms of Service strictly prohibit the use of their API/Data for u
 
 Compendum of source files (Mostly in Rust) to crawl and ingest data to be utilized by model. 
 
-### rs-id-linker 
+### rs-crawler 
 
 This crawler's primary goal is to collect internation standard recording codes, as well as any other identification for tracks. On top of that, this crawler should collect information regarding release date, artist name, features, etc. 
+
+While ids are fetched, they are enqueued and a different process within the crawler begins the process of collecting features for each enqueued track. Two other processes handle the writing of track ids (and other metadata) and the features to our feature set. 

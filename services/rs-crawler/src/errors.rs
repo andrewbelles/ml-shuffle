@@ -25,3 +25,7 @@ impl From<reqwest::Error> for CrawlerError {
 impl From<serde_json::Error> for CrawlerError {
     fn from(e: serde_json::Error) -> Self { CrawlerError::Parse(e.to_string()) }
 }
+
+impl From<sqlx::Error> for CrawlerError {
+    fn from(e: sqlx::Error) -> Self { CrawlerError::Db(e.to_string()) }
+}
