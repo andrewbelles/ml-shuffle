@@ -70,7 +70,7 @@ async fn http_with_retry(
                     return Ok(v);
                 }
                 let status = resp.status(); 
-                let body = resp.text().await.unwrap_or_default();
+                let _body = resp.text().await.unwrap_or_default();
                 let retryable = status.as_u16() == 429 || status.is_server_error(); 
                 if !retryable || attempt >= max_retries {
                     return Err(CrawlerError::Http("http.retry".to_string()));
@@ -260,7 +260,7 @@ impl Crawler {
             let _permit = match self.musicbrainz_handler.acquire().await {
                 Ok(p) => p, 
                 Err(_) => break 
-            }; 
+            };_ 
 
             if let Err(e) = self.process_link_job(job).await {
                 error!(error = ?e, "link job failed");
@@ -274,19 +274,26 @@ impl Crawler {
             job_id = job.job_id, track = %job.track_id, 
             attempt = job.attempt, "link.process");
 
-        let meta = self.db.get_track_metadata(&job.track_id).await 
-            .map_err(CrawlerError::Db("link failure".to_string()))?; 
+        let meta = match self.db.get_track_metadata(&job.track_id).await? {
+            Some(m) => m,
+            None => {
+                self.db.fail_job(job.job_id, "track not found").await?; 
+                info!(job_id = job.job_id, track = %job.track_id, "link.skip.no_track");
+                return Ok(())
+            }
+        };
 
         let mbid = if let Some(isrc) = meta.isrc.as_deref() {
             self.lookup_mbid_by_isrc(isrc).await? 
         } else {
-            self.lookup_mbid_by_query(&meta.title, &meta.first_artist()).await?
+            let artist = meta.first_artist();
+            self.lookup_mbid_by_query(&meta.title, artist).await?
         };
 
         self.db.set_mbid(&job.track_id, &mbid).await?; 
         self.db.complete_job(job.job_id).await?;
         
-        if let Err(e) = self.db.enqueue_features(job.track_id).await {
+        if let Err(e) = self.db.enqueue_features(&job.track_id).await {
             warn!(error = ?e, "enqueue_features");
         }
         info!(job_id = job.job_id, track = %job.track_id, mbid = %mbid, "link.done");
@@ -303,8 +310,9 @@ impl Crawler {
         let mbid = records.iter() 
             .filter_map(|r| r.get("id").and_then(|x| x.as_str()))
             .next()
-            .ok_or_else(|| CrawlerError::Http("no recording for ISRC".to_string()))?;
-        Ok(mbid.to_string())
+            .ok_or_else(|| CrawlerError::Http("no recording for ISRC".into()))?
+            .to_string();
+        Ok(mbid)
     }
 
     async fn lookup_mbid_by_query(&self, title: &str, artist: &str) -> 
@@ -319,8 +327,9 @@ impl Crawler {
         let mbid = records.iter() 
             .filter_map(|r| r.get("id").and_then(|x| x.as_str()))
             .next()
-            .ok_or_else(|| CrawlerError::Http("no recording for ISRC".to_string()))?;
-        Ok(mbid.to_string())
+            .ok_or_else(|| CrawlerError::Http("no recording for ISRC".into()))?
+            .to_string();
+        Ok(mbid)
     }
 
     async fn features_loop(&self) {

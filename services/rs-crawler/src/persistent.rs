@@ -87,6 +87,7 @@ pub struct Job {
 #[derive(Debug, Clone)]
 pub struct Track {
     pub id: String, 
+    pub title: Option<String>, 
     pub spotify_id: Option<String>, 
     pub artist_all: Vec<String>,
     pub isrc: Option<String>, 
@@ -97,7 +98,7 @@ pub struct Track {
 }
 
 impl Track {
-    fn first_artist(&self) -> &str {
+    pub fn first_artist(&self) -> &str {
         self.artist_all
             .first()
             .map(String::as_str)
@@ -169,8 +170,9 @@ impl Persistent {
         );"
         ).execute(pool).await?;
 
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_raw_files_track ON raw_files(track_id);")
-            .execute(pool).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_raw_files_track ON raw_files(
+                track_id);"
+        ).execute(pool).await?;
 
         sqlx::query(
         r"
@@ -480,7 +482,7 @@ impl Persistent {
         Result<Option<Track>, CrawlerError> {
         let row = sqlx::query(
             r"
-            SELECT id, spotify_id, artist_all, isrc, mb_recording_id, 
+            SELECT id, spotify_id, title, artist_all, isrc, mb_recording_id, 
                 linked_ok, features_ok,
             updated_at
                 FROM tracks where id = ?1;
@@ -498,14 +500,15 @@ impl Persistent {
                 .unwrap_or_default();
 
             Track {
-            id: r.get("id"),
-            spotify_id: r.try_get("spotify_id").ok(),
-            artist_all,
-            isrc: r.try_get("isrc").ok(),
-            mb_recording_id: r.try_get("mb_recording_id").ok(),
-            linked_ok: r.get::<i64, _>("linked_ok") == 1,
-            features_ok: r.get::<i64, _>("features_ok") == 1, 
-            updated_at: r.get("updated_at")
+                id: r.get("id"),
+                title: r.try_get("title").ok(),
+                spotify_id: r.try_get("spotify_id").ok(),
+                artist_all,
+                isrc: r.try_get("isrc").ok(),
+                mb_recording_id: r.try_get("mb_recording_id").ok(),
+                linked_ok: r.get::<i64, _>("linked_ok") == 1,
+                features_ok: r.get::<i64, _>("features_ok") == 1, 
+                updated_at: r.get("updated_at")
             }
         }))
     }
