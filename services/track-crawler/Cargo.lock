@@ -1714,32 +1714,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rs-crawler"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "dotenvy",
- "rand 0.8.5",
- "reqwest",
- "scraper",
- "serde",
- "serde_json",
- "sqlx",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-appender",
- "tracing-error",
- "tracing-subscriber",
- "url",
- "uuid",
- "zstd",
-]
-
-[[package]]
 name = "rsa"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2699,6 +2673,32 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
+]
+
+[[package]]
+name = "track-crawler"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dotenvy",
+ "rand 0.8.5",
+ "reqwest",
+ "scraper",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-appender",
+ "tracing-error",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "zstd",
 ]
 
 [[package]]

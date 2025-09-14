@@ -13,9 +13,9 @@ use tokio::{sync::Semaphore, task::JoinHandle, time::sleep};
 use tokio_util::sync::CancellationToken; 
 use tracing::{debug, error, info, warn};
 
-use crate::{config::{HttpConfig, LoggingConfig}, fetch::LastFmClient};
+use crate::{config::{self, HttpConfig, LoggingConfig}, fetch::LastFmClient, persistent};
 use crate::fetch::*;    // all clients are imported 
-use crate::persistent::{Job, JobType, Persistent};
+use crate::persistent::{Job, JobType, Persistent, JobStatus};
 use crate::sink::{DiskZstdSink, RawType};
 use crate::errors::CrawlerError;
 use crate::config::AppConfig; 
@@ -72,7 +72,9 @@ async fn http_with_retry(
                 let _body = resp.text().await.unwrap_or_default();
                 let retryable = status.as_u16() == 429 || status.is_server_error(); 
                 if !retryable || attempt >= max_retries {
-                    return Err(CrawlerError::Http("http.retry".to_string()));
+                    return Err(CrawlerError::Http(
+                        format!("status {} after {} retries", status, attempt)
+                    ));
                 }
                 let backoff = generate_backoff(backoff_ms, attempt, &mut rng);
                 warn!(status = %status, backoff = ?backoff.as_millis(), "http.retry");
@@ -198,6 +200,7 @@ impl Crawler {
 
         let link_handle = self.spawn_link_workers(); 
         let feat_handle = self.spawn_feature_workers(); 
+        let feed_handle = self.spawn_feed_worker(); 
 
         let shutdown = self.shutdown.clone();
         let trigger = tokio::spawn(async move {
@@ -208,7 +211,7 @@ impl Crawler {
         });
 
         tokio::select! {
-            _ = self.shutdown.cancelled() => {
+            () = self.shutdown.cancelled() => {
                 info!(reason = "shutdown token", "crawler.stop");
             }
             r = link_handle => {
@@ -223,10 +226,21 @@ impl Crawler {
                 }
                 self.shutdown.cancel(); 
             }
+            r = feed_handle => {
+                if let Err(e) = r {
+                    error!(error = ?e, "feed_workers task found error");
+                }
+                self.shutdown().cancel();
+            }
         }
         let _ = trigger.await; 
         info!("crawler.exit");
         Ok(())
+    }
+
+    fn spawn_feed_worker(&self) -> JoinHandle<()> {
+        let this = self.clone_for_task();
+        tokio::spawn(async move { this.feed_loop().await })
     }
 
     fn spawn_link_workers(&self) -> JoinHandle<()> {
@@ -486,5 +500,197 @@ impl Crawler {
         info!(job_id = job.job_id, track = %job.track_id, "features.done");
 
         Ok(())
+    }
+
+    async fn refresh_token(
+        client: &SpotifyClient, 
+        cfg: &config::SpotifyConfig, 
+        max_retry: usize,
+        backoff_ms: u64
+    ) -> Result<(String, tokio::time::Instant), CrawlerError> {
+        let response = http_with_retry(
+            client.token_request().basic_auth(
+                &cfg.client_id, 
+                Some(&cfg.client_secret)
+            ), 
+            max_retry, 
+            backoff_ms
+        ).await?; 
+        let token_str = response["access_token"].as_str() 
+            .ok_or_else(|| CrawlerError::Http("no access_token in response".into()))?
+            .to_string();
+        let expires_in = response["expires_in"].as_u64().unwrap_or(3600);
+        let expire_time = tokio::time::Instant::now() + std::time::Duration::from_secs(expires_in - 60);
+        Ok((token_str, expire_time))
+    }
+
+    async fn insert_tracks(&self, search: serde_json::Value, token: &str) -> bool{
+        let items = search.pointer("/tracks/items")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if items.is_empty() {
+            debug!("no tracks found for query");
+            return false; 
+        } 
+        
+        let ids: Vec<&str> = items.iter()
+            .filter_map(|i| i.get("id").and_then(|v| v.as_str()))
+            .collect();
+        let ids = ids.join(",");
+        
+        let tracks = http_with_retry(
+            self.clients.spotify.batch_track(
+                &ids, 
+                token
+            ),
+            self.limits.http_max_retry,
+            self.limits.http_backoff_ms
+        ).await; 
+
+        let tracks = match tracks {
+            Ok(value) => value, 
+            Err(e) => {
+                warn!(error = ?e, "spotify batch request failed");
+                sleep(Duration::from_millis(self.limits.queue_poll_ms))
+                    .await;
+                return false; 
+            }
+        };
+
+        let tracks = tracks.get("tracks")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut count = 0; 
+        for track in tracks {
+            if track.is_null() {
+                continue; 
+            }
+
+            let spotify_track = persistent::SpotifyTrack::new(&track);
+            match self.db.ensure_track(&spotify_track).await {
+                Ok(track_id) => {
+                    count += 1; 
+                    debug!(
+                        track = %track_id, 
+                        title = %spotify_track.title,
+                        "track ensured in db"
+                    );
+                },
+                Err(e) => {
+                    error!(error = ?e, track = ?spotify_track.spotify_id,
+                        "failed to ensure track in db");
+                }
+            }
+
+            if let Some(spotify_id) = spotify_track.spotify_id.as_deref() {
+                match self.sink.write_json(
+                    RawType::SpotifyTrack, 
+                    spotify_id, 
+                    track.clone()) {
+
+                    Ok(path) => {
+                        if let Err(e) = self.db.index_raw_file(
+                            spotify_id,
+                            "spotify",
+                            "track", 
+                            spotify_id,
+                            path.to_str().unwrap_or_default()
+                        ).await {
+                            warn!(error = ?e, spotify_id = %spotify_id, 
+                                "index_raw_file spotify");
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = ?e, spotify_id = %spotify_id, "write_json spotify");
+                    }
+                }
+            }
+        }
+
+        if count > 0 {
+            info!("feed.added {} new tracks from Spotify", count);
+        }
+        true 
+    }
+
+    async fn feed_loop(&self) {
+        info!("crawler.feed.loop.start");
+        let min_pending: i64 = 50; 
+        let mut bearer_token: Option<String> = None; 
+        let mut token_expiry = tokio::time::Instant::now(); 
+
+        while !self.shutdown.is_cancelled() {
+            let pending_links = match self.db.count_jobs(
+                    JobType::Link, JobStatus::Pending
+                ).await {
+                Ok(count) =>  count, 
+                Err(e) => {
+                    error!(error = ?e, "count_jobs failed");
+                    sleep(Duration::from_millis(self.limits.queue_poll_ms)).await; 
+                    continue; 
+                }
+            }; 
+
+            if pending_links >= min_pending {
+                sleep(Duration::from_millis(self.limits.queue_poll_ms)).await; 
+                continue; 
+            }
+
+            if bearer_token.is_none() || tokio::time::Instant::now() >= token_expiry {
+                match Self::refresh_token(
+                    &self.clients.spotify, 
+                    &self.clients.spotify.cfg,
+                    self.limits.http_max_retry,
+                    self.limits.http_backoff_ms
+                ).await {
+                    Ok((token, exp)) => {
+                        bearer_token = Some(token);
+                        token_expiry = exp; 
+                        debug!("fetched new spotify token (expires: ~{:?})",
+                            token_expiry);
+                    }
+                    Err(e) => {
+                        error!(error = ?e, "spotify token request failed");
+                        bearer_token = None; 
+                    }
+                }
+            }
+            if bearer_token.is_some() {
+                let year: u32 = SmallRng::from_entropy().gen_range(1950..=2025);
+                let offset: u32 = SmallRng::from_entropy().gen_range(0..1000);
+                let query = format!("year:{year}");
+                debug!(%query, %offset, "spotify search");
+
+                let search = http_with_retry(
+                    self.clients.spotify.search(
+                        &query, 
+                        50_u32, 
+                        offset, 
+                        bearer_token.as_ref().unwrap()
+                    ), 
+                    self.limits.http_max_retry,
+                    self.limits.http_backoff_ms
+                ).await;
+                
+                let search = match search {
+                    Ok(value) => value, 
+                    Err(e) => {
+                        warn!(error = ?e, "spotify search failed");
+                        sleep(Duration::from_millis(self.limits.queue_poll_ms)).await;
+                        continue; 
+                    }
+                };
+                let token = bearer_token.as_deref().unwrap(); 
+                if !self.insert_tracks(search, token).await {
+                    warn!("insert_tracks failed");
+                    sleep(Duration::from_millis(self.limits.queue_poll_ms)).await; 
+                    continue; 
+                }
+            }
+            sleep(Duration::from_millis(self.limits.queue_poll_ms)).await; 
+        }
+        info!("crawler.feed.loop.stop");
     }
 }

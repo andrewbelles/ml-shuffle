@@ -26,6 +26,26 @@ pub struct SpotifyTrack {
     pub popularity: Option<i32> 
 }
 
+impl SpotifyTrack {
+    pub fn new(track: &serde_json::Value) -> Self {
+        Self {
+            spotify_id: track.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            isrc: track.pointer("/external_ids/isrc").and_then(|v| v.as_str()).map(str::to_string),
+            title: track.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            artist_all: track.get("artists").and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter().filter_map(|a| a.get("name").and_then(|v| v.as_str()))
+                       .map(|name| name.to_string()).collect()
+                }).unwrap_or_else(|| Vec::new()),
+            album: track.pointer("/album/name").and_then(|v| v.as_str()).map(str::to_string),
+            duration_ms: track.get("duration_ms").and_then(|v| v.as_i64()),
+            release_date: track.pointer("/album/release_date").and_then(|v| v.as_str()).map(str::to_string),
+            explicit: track.get("explicit").and_then(|v| v.as_bool()),
+            popularity: track.get("popularity").and_then(|v| v.as_i64()).map(|x| x as i32),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobType {
     Link, 
@@ -233,6 +253,18 @@ impl Persistent {
 
     fn now() -> i64 {
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+    }
+
+    pub async fn count_jobs(&self, kind: JobType, status: JobStatus) -> 
+        Result<i64, CrawlerError> {
+        let count = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM jobs WHERE kind = ?1 AND status = ?2;"
+        )
+        .bind(kind.as_str())
+        .bind(status.as_str())
+        .fetch_one(&self.pool)
+        .await?; 
+        Ok(count)
     }
 
     pub async fn upsert_track(&self, track: &SpotifyTrack) -> 

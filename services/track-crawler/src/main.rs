@@ -11,6 +11,7 @@ mod config;
 mod fetch;
 mod persistent; 
 mod sink;
+mod logging; 
 
 mod errors; 
 use crate::errors::CrawlerError;
@@ -37,6 +38,7 @@ async fn main() -> Result<(), CrawlerError> {
     let disk = sink::DiskZstdSink::new("../data/raw/", 3);
     let limits = crawler::CrawlerLimits::default();
 
+    let _logger = logging::init_logging(&cfgs.logging);
     let crawler = crawler::Crawler::new(&cfgs, db, clients, disk, limits);
 
     let () = crawler.run().await?;
