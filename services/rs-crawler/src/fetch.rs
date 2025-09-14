@@ -101,22 +101,6 @@ impl SpotifyClient {
         self.http.get(url).bearer_auth(bearer).query(&[("ids", ids_csv)])
     }
 
-    /// GET /v1/audio-features/{id}
-    pub fn audio_features(&self, track_id: &str, bearer: &str) -> 
-        reqwest::RequestBuilder {
-        let url = self.cfg.api_base.join(
-            &format!("audio-features/{track_id}")
-        ).unwrap();
-        self.http.get(url).bearer_auth(bearer)
-    }
-
-    /// GET /v1/audio-features?ids=
-    pub fn batch_audio_features(&self, ids_csv: &str, bearer: &str) -> 
-        reqwest::RequestBuilder {
-        let url = self.cfg.api_base.join("audio-features").unwrap();
-        self.http.get(url).bearer_auth(bearer).query(&[("ids", ids_csv)])
-    }
-
     /// GET /v1/search?type=track&q=...&limit=&offset=
     pub fn search(&self, query: &str, limit: u32, offset: u32, bearer: &str) ->
         reqwest::RequestBuilder {

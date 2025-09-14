@@ -6,6 +6,7 @@
 //!
 //!
 
+mod crawler; 
 
 mod config; 
 mod errors; 

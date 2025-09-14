@@ -88,11 +88,21 @@ pub struct Job {
 pub struct Track {
     pub id: String, 
     pub spotify_id: Option<String>, 
+    pub artist_all: Vec<String>,
     pub isrc: Option<String>, 
     pub mb_recording_id: Option<String>, 
     pub linked_ok: bool, 
     pub features_ok: bool,
     pub updated_at: i64 
+}
+
+impl Track {
+    fn first_artist(&self) -> &str {
+        self.artist_all
+            .first()
+            .map(String::as_str)
+            .unwrap_or("unknown")
+    }
 }
 
 pub struct Persistent {
@@ -379,8 +389,8 @@ impl Persistent {
         let updated = sqlx::query(
             r"
             UPDATE jobs 
-                SET status = 'active'
-                    attempt = attempt + 1 
+                SET status = 'active',
+                    attempt = attempt + 1, 
                     updated_at = ?1 
                 WHERE job_id = ?2 AND status = 'pending';
             "
@@ -470,7 +480,8 @@ impl Persistent {
         Result<Option<Track>, CrawlerError> {
         let row = sqlx::query(
             r"
-            SELECT id, spotify_id, isrc, mb_recording_id, linked_ok, features_ok,
+            SELECT id, spotify_id, artist_all, isrc, mb_recording_id, 
+                linked_ok, features_ok,
             updated_at
                 FROM tracks where id = ?1;
             "
@@ -479,14 +490,23 @@ impl Persistent {
         .fetch_optional(&self.pool)
         .await?; 
 
-        Ok(row.map(|r| Track {
+        Ok(row.map(|r| { 
+            let artist_all_json: Option<String> = r.try_get("artist_all").ok();
+            let artist_all: Vec<String> = artist_all_json
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+                .unwrap_or_default();
+
+            Track {
             id: r.get("id"),
             spotify_id: r.try_get("spotify_id").ok(),
+            artist_all,
             isrc: r.try_get("isrc").ok(),
             mb_recording_id: r.try_get("mb_recording_id").ok(),
             linked_ok: r.get::<i64, _>("linked_ok") == 1,
             features_ok: r.get::<i64, _>("features_ok") == 1, 
             updated_at: r.get("updated_at")
+            }
         }))
     }
 

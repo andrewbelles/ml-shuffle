@@ -195,43 +195,6 @@ fn build_musicbrainz(identity: &IdentityConfig) ->
     })
 }   
 
-#[derive(Debug, Clone)]
-pub struct AcoustIdConfig {
-    pub api_key: String, 
-    pub base_url: Url, 
-    pub meta: String 
-}
-
-fn build_acoustid() -> Result<AcoustIdConfig, CrawlerError> {
-    let api_key = env_check("ACOUST_ID")?;
-
-    let base_url = std::env::var("ACOUST_BASE_URL")
-        .unwrap_or_else(|_| "https:/api.acoustid.org/v2/".to_string());
-    let mut base_url = Url::parse(&base_url)
-        .map_err(|e| CrawlerError::Config(
-            format!("ACOUST_BASE_URL invalid {e}")
-        ))?;
-
-    ensure_https(&base_url)
-        .map_err(CrawlerError::Config)?;
-    ensure_host(&base_url, "api.acoustid.org")
-        .map_err(CrawlerError::Config)?;
-
-    // ensure trailing slash
-    if !base_url.path().ends_with('/') {
-        let mut path = base_url.path().to_string();
-        path.push('/');
-        base_url.set_path(&path);
-    }
-
-    let meta = std::env::var("ACOUSTID_META")
-        .unwrap_or_else(|_| 
-            "recordings+recordingids+releaseids+tracks+compress".to_string()
-        );
-
-    Ok( AcoustIdConfig { api_key, base_url, meta } )
-}
-
 /// 
 /// Configuration for Http timeouts, retries, etc. 
 ///
