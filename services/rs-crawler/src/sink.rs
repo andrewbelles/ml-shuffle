@@ -35,6 +35,7 @@ impl DiskZstdSink {
 
         match kind {
             RawType::SpotifyTrack => Self::prune_spotify_track(&mut json),
+            _ => {},
         }
 
         let rpath = Self::rel_path(kind, Self::sanitize_key(key));

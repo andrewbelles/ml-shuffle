@@ -12,9 +12,8 @@ use rand::{rngs::SmallRng, Rng, SeedableRng};
 use tokio::{sync::Semaphore, task::JoinHandle, time::sleep};
 use tokio_util::sync::CancellationToken; 
 use tracing::{debug, error, info, warn};
-use uuid::Uuid; 
 
-use crate::{config::{AcousticBrainzConfig, HttpConfig, LoggingConfig}, fetch::LastFmClient};
+use crate::{config::{HttpConfig, LoggingConfig}, fetch::LastFmClient};
 use crate::fetch::*;    // all clients are imported 
 use crate::persistent::{Job, JobType, Persistent};
 use crate::sink::{DiskZstdSink, RawType};
@@ -245,25 +244,23 @@ impl Crawler {
         while !self.shutdown.is_cancelled() {
             self.musicbrainz_rate.wait().await;
 
-            let Some(job) = match self.db.claim_one_job(JobType::Link).await {
-                Ok(v) => v, 
+            match self.db.claim_one_job(JobType::Link).await {
+                Ok(Some(job)) => {
+                    let _permit = match self.musicbrainz_handler.acquire().await {
+                        Ok(p) => p, 
+                        Err(_) => break
+                    };
+                    if let Err(e) = self.process_link_job(job).await {
+                        error!(error = ?e, "link job failed");
+                    }
+                }
+                Ok(None) => { 
+                    sleep(poll).await; 
+                }
                 Err(e) => {
                     error!(error = ?e, "claim_one_job(Link) failed");
                     sleep(poll).await; 
-                    continue; 
-                },
-            } else {
-                sleep(poll).await; 
-                continue; 
-            };
-
-            let _permit = match self.musicbrainz_handler.acquire().await {
-                Ok(p) => p, 
-                Err(_) => break 
-            };_ 
-
-            if let Err(e) = self.process_link_job(job).await {
-                error!(error = ?e, "link job failed");
+                }
             }
         }
         info!("crawler.link.loop.stop");
@@ -286,8 +283,9 @@ impl Crawler {
         let mbid = if let Some(isrc) = meta.isrc.as_deref() {
             self.lookup_mbid_by_isrc(isrc).await? 
         } else {
+            let title  = meta.title.as_deref().unwrap_or("");
             let artist = meta.first_artist();
-            self.lookup_mbid_by_query(&meta.title, artist).await?
+            self.lookup_mbid_by_query(title, artist).await?
         };
 
         self.db.set_mbid(&job.track_id, &mbid).await?; 
@@ -336,23 +334,23 @@ impl Crawler {
         info!("crawler.features.loop.start");
         let poll = Duration::from_millis(self.limits.queue_poll_ms);
         while !self.shutdown.is_cancelled() {
-            let Some(job) = match self.db.claim_one_job(JobType::Features).await {
-                Ok(v) => v,
+            match self.db.claim_one_job(JobType::Features).await {
+                Ok(Some(job)) => {
+                    let _permit = match self.features_handler.acquire().await {
+                        Ok(p) => p, 
+                        Err(_) => break
+                    };
+                    if let Err(e) = self.process_features_job(job).await {
+                        error!(error = ?e, "features job failed");
+                    }
+                }
+                Ok(None) => { 
+                    sleep(poll).await; 
+                }
                 Err(e) => {
                     error!(error = ?e, "claim_one_job(Features) failed");
-                    continue; 
+                    sleep(poll).await; 
                 }
-            } else {
-                sleep(poll).await; 
-                continue; 
-            };
-
-            let _permit = match self.features_handler.acquire().await {
-                Ok(p) => p, 
-                Err(_) => break 
-            };
-            if let Err(e) = self.process_features_job(job).await {
-                error!(error = ?e, "features job failed");
             }
         }
         info!("crawler.features.loop.stop");
@@ -362,35 +360,46 @@ impl Crawler {
         debug!(job_id = job.job_id, track = %job.track_id, attempt = job.attempt, 
             "features.process");
 
-        let meta = self.db.get_track_metadata(&job.track_id).await 
-            .map_err(CrawlerError::Db("no metadata for id".to_string()))?; 
-        let mbid = meta.mbid.as_deref().ok_or_else(
-            CrawlerError::NotFound("No mbid found".to_string()
-        ))?;
+        let meta = match self.db.get_track_metadata(&job.track_id).await 
+            .map_err(|e| CrawlerError::Db(format!("get_track_metadata: {e}")))?
+        {
+            Some(m) => m, 
+            None => {
+                self.db.fail_job(job.job_id, "track not found").await?; 
+                info!(job_id = job.job_id, track = %job.track_id, "skip.no_track");
+                return Ok(());
+            }
+        };
 
-        let highlevel = self.clients.acousticbrainz.features(mbid, "high-level");
+        let mbid = meta.mb_recording_id
+            .as_deref()
+            .ok_or_else(|| CrawlerError::NotFound("No mbid found".into()))?;
         let highlevel = http_with_retry(
-            highlevel, 
+            self.clients.acousticbrainz.features(mbid, "high-level"), 
             self.limits.http_max_retry, 
             self.limits.http_backoff_ms
-        );
+        ).await?;
 
-        let path_highlevel = self.sink.write_json(RawType::ABHighLevel, mbid, &highlevel);
+        let path_highlevel = self.sink.write_json(
+            RawType::ABHighLevel, 
+            mbid, 
+            highlevel.clone()
+        )?;
         self.db.index_raw_file(
             &job.track_id, 
             "acousticbrainz", 
             "high-level",
             mbid, 
-            path_highlevel
+            path_highlevel.to_str().unwrap_or_default()
         ).await?;
 
         let (highlevel_numeric, highlevel_text) = DiskZstdSink::extract_high_level(
             &highlevel
         );
 
-        self.db.upsert_features_num(job.track_id, "acousticbrainz", &highlevel_numeric)
+        self.db.upsert_features_num(&job.track_id, "acousticbrainz", &highlevel_numeric)
             .await?; 
-        self.db.upsert_features_text(job.track_id, "acousticbrainz", &highlevel_text)
+        self.db.upsert_features_text(&job.track_id, "acousticbrainz", &highlevel_text)
             .await?; 
 
         let lowlevel = self.clients.acousticbrainz.features(mbid, "low-level");
@@ -398,20 +407,24 @@ impl Crawler {
             lowlevel, 
             self.limits.http_max_retry, 
             self.limits.http_backoff_ms
-        );
+        ).await?;
 
-        let path_lowlevel = self.sink.write_json(RawType::ABLowLevel, mbid, &lowlevel);
+        let path_lowlevel = self.sink.write_json(
+            RawType::ABLowLevel, 
+            mbid, 
+            lowlevel.clone()
+        )?;
         self.db.index_raw_file(
             &job.track_id, 
             "acousticbrainz", 
             "low-level",
             mbid, 
-            path_lowlevel
+            path_lowlevel.to_str().unwrap_or_default()
         ).await?;
 
         let lowlevel_numeric = DiskZstdSink::extract_low_level(&lowlevel); 
 
-        self.db.upsert_features_num(job.track_id, "acousticbrainz", &lowlevel_numeric)
+        self.db.upsert_features_num(&job.track_id, "acousticbrainz", &lowlevel_numeric)
             .await?; 
 
         // Get tags from mbid, if fails get conventionally else warning 
@@ -422,28 +435,37 @@ impl Crawler {
         };
         
         if tags.is_err() {
+            let title  = meta.title.as_deref().unwrap_or("");
             let artist = meta.first_artist(); 
-            let resp = self.clients.lastfm.track_top_tags(&artist, meta.title);
             tags = http_with_retry(
-                resp,
+                self.clients.lastfm.track_top_tags(&artist, &title),
                 self.limits.http_max_retry, 
                 self.limits.http_backoff_ms
             ).await;
         }
 
         if let Ok(tags) = tags {
-            let key = meta.mbid.as_deref().unwrap_or_else(|| { 
-                meta.spotify_id.as_deref().unwrap_or("unknown");       
-            });
-            let path_tags = self.sink.write_json(RawType::LastFmTopTags, key, &tags)
-                .await?;             
-            self.db.index_raw_file(job.track_id, "lastfm", "toptags", key, path_tags)
-                .await?; 
+            let mbid = meta.mb_recording_id
+                .as_deref()
+                .ok_or_else(|| CrawlerError::NotFound("No mbid found".into()))?;
+            let path_tags = self.sink.write_json(
+                RawType::LastFmTopTags, 
+                mbid, 
+                tags
+            )?;
+                             
+            self.db.index_raw_file(
+                &job.track_id, 
+                "lastfm", 
+                "toptags", 
+                mbid, 
+                path_tags.to_str().unwrap_or_default()
+            ).await?; 
         } else {
             warn!(track = %job.track_id, "lastfm tags missing");
         }
 
-        self.db.mark_features_ok(job.track_id).await?; 
+        self.db.mark_features_ok(&job.track_id).await?; 
         self.db.complete_job(job.job_id).await?; 
         info!(job_id = job.job_id, track = %job.track_id, "features.done");
 
