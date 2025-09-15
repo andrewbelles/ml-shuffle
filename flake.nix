@@ -1,5 +1,5 @@
 {
-  description = "ml-shuffle dev/build env for full project. Restricted to linux systems";
+  description = "ml-shuffle unified dev/build environment for Python, Rust, C++, & CUDA";
 
   inputs = {
     nixpkgs.url      = "github:NixOS/nixpkgs/nixos-25.05";
@@ -10,95 +10,99 @@
 
   outputs = { self, nixpkgs, flake-utils, rust-overlay, crane, ... }:
     flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
-      let
+      let 
         pkgs = import nixpkgs {
           inherit system; 
-          overlays = [ rust-overlay.overlays.default ];
+          overlays = [ rust-overlay.overlays.default ]; 
+          config.allowUnfree = true; 
         };
 
-        rustToolchain = pkgs.rust-bin.stable.latest.default; 
-        craneLib = crane.mkLib pkgs;
+        rustToolchain = pkgs.rust-bin.stable.latest.deafult.override {
+          extensions = [ "rust-src" ];
+        };
 
-        rsCrawlerSrc = craneLib.cleanCargoSource (
-          craneLib.path ./services/rs-crawler
+        craneLib = crane.mkLib pkgs; 
+
+        trackCrawlerSrc = craneLib.cleanCargoSource (
+          craneLib.path ./services/track-crawler
         );
 
         commonNative = [
           pkgs.pkg-config 
-          pkgs.openssl
+          pkgs.openssl 
           pkgs.cmake 
           pkgs.clang 
+          pkgs.gcc 
+          pkgs.binutils 
         ];
 
         devTools = [
-          rustToolchain
-          pkgs.rust-analyzer 
+          rustToolchain 
+          pkgs.rust-analyzer
           pkgs.sqlx-cli 
-          pkgs.sqlite 
-          pkgs.zstd  
           pkgs.just 
+          pkgs.sqlite 
+          pkgs.zstd 
+          pkgs.python3Full 
+          pkgs.pyright 
+          pkgs.clang-tools
+          pkgs.cudatoolkit
+          pkgs.linuxPackages.nvidia_x11 
         ];
       in {
         devShells.default = pkgs.mkShell {
-          packages = devTools ++ commonNative;
+          packages = devTools ++ commonNative; 
           env = {
-            DATABASE_URL    = "sqlite:./services/data/raw.db";
-            DATA_ROOT = "./services/data/"; 
-            RUST_LOG  = "info,rs_crawler=debug,reqwest=warn";
-            LIVE_HTTP = "0";
+            DATABASE_URL = "sqlite:./services/data/raw.db";
+            DATA_ROOL    = "./services/data/";
+            RUST_LOG     = "info,track_crawler=debug,reqwest=warn";
+            LIVE_HTTP    = "0";
+            CUDA_PATH    = "${pkgs.cudatoolkit}";
           };
           shellHook = ''
-            mkdir -p ./services/data/ ./services/data/http-cache
+          mkdir -p ./services/data/ ./services/data/http-cache 
+          echo "ml-shuffle dev shell"
+          echo "Rust toolchain: $(rustc --version), Python $(python --version)" 
           '';
         };
 
-        packages.rs-crawler = craneLib.buildPackage {
-          pname   = "rs-crawler";
+        packages."track_crawler" = craneLib.buildPackage {
+          pname   = "track-crawler";
           version = "0.1.0";
-          src     = rsCrawlerSrc;
-
-          nativeBuildInputs = commonNative;
-          buildInputs       = [ pkgs.openssl ]; 
+          src     = trackCrawlerSrc; 
+          nativeBuildInputs = commonNative; 
+          buildInputs = [ pkgs.openssl ];
           OPENSSL_NO_VENDOR = "1";
         };
 
-        packages.default = self.packages.${system}.rs-crawler; 
+        packages.default = self.packages.${system}."track-crawler";
 
-        apps.rs-crawler = {
-          type    = "app";
-          program = "${self.packages.${system}.rs-crawler}/bin/rs-crawler"; 
+        apps."track-crawler" = {
+          type = "app";
+          program = "${self.packages.${system}.track-crawler}/bin/track-crawler";
         };
 
-        checks.rs-crawler-build = self.packages.${system}.rs-crawler;
-
-        checks.rs-crawler-tests = 
-          let 
-            cargoArtifacts = craneLib.buildDepsOnly {
-              pname = "rs-crawler-deps";
-              src   = rsCrawlerSrc;
-              nativeBuildInputs = commonNative;
-              buildInputs = [ pkgs.openssl ]; 
-              OPENSSL_NO_VENDOR = "1";
-            };
-          in 
-          craneLib.cargoTest {
-            pname = "rs-crawler-tests";
-            src   = rsCrawlerSrc; 
-
-            inherit cargoArtifacts; 
+        checks."track-crawler-build" = self.packages.${system}."track-crawler";
+        checks."track-crawler-tests" = craneLib.cargoTest {
+          pname = "track-crawler-tests";
+          src   = trackCrawlerSrc;
+          cargoArtifacts = craneLib.buildDepsOnly {
+            pname = "track-crawler-deps";
+            src   = trackCrawlerSrc; 
             nativeBuildInputs = commonNative; 
-            buildInputs       = [ pkgs.openssl ];
+            buildInputs = [ pkgs.openssl ];
             OPENSSL_NO_VENDOR = "1";
-
-            cargoTestExtraArgs = "-- --nocapture";
-
-            CARGO_TERM_COLOR = "always";
-            RUST_LOG = "info,rs_crawler=debug,reqwest=warn";
-            DATABASE_URL = "sqlite::memory:";
-            LIVE_HTTP = "0";
           };
+          nativeBuildInputs = commonNative;
+          buildInputs = [ pkgs.openssl ];
+          OPENSSL_NO_VENDOR = "1";
+          CARGO_TERM_COLOR = "always";
+          RUST_LOG = "info,track_crawler=debug,reqwest=warn";
+          DATABASE_URL = "sqlite::memory:";
+          LIVE_HTTP = "0";
+        };
 
-        formatter = pkgs.alejandra;
+        formatter = pkgs.alejandra; 
       }
-    ); 
+    );
 }
