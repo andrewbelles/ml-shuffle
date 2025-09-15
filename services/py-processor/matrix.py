@@ -12,14 +12,21 @@ import numpy as np
 import pandas as pd 
 import zstandard as zstd
 
+
 def features(path: str) -> pd.DataFrame:
     db = sqlite3.connect(path)
     try: 
         data = pd.read_sql_query(
             """
-            SELECT track_id, source, feature, num_value 
-            FROM features 
-            WHERE dtype = 'num'
+            SELECT 
+                t.spotify_id AS track_id, 
+                f.source, 
+                f.feature, 
+                f.num_value
+            FROM features f 
+            JOIN tracks t 
+            ON t.id = f.track_id 
+            WHERE f.dtype = 'num' AND t.spotify_id IS NOT NULL 
             """,
             db
         )
@@ -89,12 +96,13 @@ def spotify_raw(path: str) -> pd.DataFrame:
     return rel
 
 def numeric_from_raw(root: str | Path, rel: pd.DataFrame) -> pd.DataFrame:
-    root = Path(root)
+    root = Path(root) 
+    cols = ["track_id", "duration_ms", "popularity", "explicit"]
 
     if rel.empty:
         return pd.DataFrame(
             index=pd.Index([], name="track_id"),
-            columns=pd.Index(["duration_ms", "popularity", "explicit"])
+            columns=pd.Index(cols)
         ).astype("float32")
 
     rows = []
@@ -118,13 +126,15 @@ def numeric_from_raw(root: str | Path, rel: pd.DataFrame) -> pd.DataFrame:
         rows.append(
             {
                 "track_id": row.track_id,
-                "duration_ms": float(duration_ms) if duration_ms is not None else np.nan, 
+                "duration_ms": (float(duration_ms) 
+                                if duration_ms is not None else np.nan), 
                 "popularity": float(popularity) if popularity is not None else np.nan, 
-                "explicit": 1.0 if explicit else 0.0 if explicit is not None else np.nan, 
+                "explicit": (1.0 if explicit else 
+                             0.0 if explicit is not None else np.nan), 
             }
         )
 
-    data = (pd.DataFrame(rows)
+    data = (pd.DataFrame.from_records(rows, columns=cols)
         .drop_duplicates(subset=["track_id"])
         .set_index("track_id"))
     return data.astype("float32")
@@ -143,20 +153,11 @@ def main():
     wide = features(path)
     rel  = spotify_raw(path)
     root = Path(raw)
-    n = len(rel)
-    exists_count = sum(
-            ((root / Path(p))
-             .exists() if not Path(p).is_absolute() else Path(p).exists())
-            for p in rel["rel_path"]
-    )
-
-    print(f"[test] rows={n}, files={exists_count}")
-
     mat  = numeric_from_raw(root, rel)
     mat  = mat.add_prefix("spotify.")
     wide = wide.join(mat, how="left")
 
-    out = Path(args.out)
+    out  = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     wide.to_parquet(out, index=True)
 
