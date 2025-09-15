@@ -17,9 +17,18 @@
           config.allowUnfree = true; 
         };
 
-        rustToolchain = pkgs.rust-bin.stable.latest.deafult.override {
+        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" ];
         };
+
+        pythonEnv = pkgs.python3.withPackages (ps: 
+          (with ps; [
+            numpy pandas pyarrow fastparquet 
+            scikit-learn scipy matplotlib ipykernel 
+            zstandard tqdm rich 
+          ]) 
+          ++ pkgs.lib.optional (ps ? tensorflow) ps.tensorflow
+        );
 
         craneLib = crane.mkLib pkgs; 
 
@@ -43,6 +52,7 @@
           pkgs.just 
           pkgs.sqlite 
           pkgs.zstd 
+          pythonEnv
           pkgs.python3Full 
           pkgs.pyright 
           pkgs.clang-tools
@@ -54,7 +64,7 @@
           packages = devTools ++ commonNative; 
           env = {
             DATABASE_URL = "sqlite:./services/data/raw.db";
-            DATA_ROOL    = "./services/data/";
+            DATA_ROOT    = "./services/data/";
             RUST_LOG     = "info,track_crawler=debug,reqwest=warn";
             LIVE_HTTP    = "0";
             CUDA_PATH    = "${pkgs.cudatoolkit}";
@@ -63,15 +73,16 @@
           mkdir -p ./services/data/ ./services/data/http-cache 
           echo "ml-shuffle dev shell"
           echo "Rust toolchain: $(rustc --version), Python $(python --version)" 
+          echo "GCC: $(gcc --version), NVCC: $(nvcc --version)"
           '';
         };
 
-        packages."track_crawler" = craneLib.buildPackage {
+        packages."track-crawler" = craneLib.buildPackage {
           pname   = "track-crawler";
           version = "0.1.0";
           src     = trackCrawlerSrc; 
           nativeBuildInputs = commonNative; 
-          buildInputs = [ pkgs.openssl ];
+          buildInputs = [ pkgs.openssl pkgs.sqlite ];
           OPENSSL_NO_VENDOR = "1";
         };
 
@@ -79,7 +90,7 @@
 
         apps."track-crawler" = {
           type = "app";
-          program = "${self.packages.${system}.track-crawler}/bin/track-crawler";
+          program = "${self.packages.${system}."track-crawler"}/bin/track-crawler";
         };
 
         checks."track-crawler-build" = self.packages.${system}."track-crawler";
@@ -90,11 +101,11 @@
             pname = "track-crawler-deps";
             src   = trackCrawlerSrc; 
             nativeBuildInputs = commonNative; 
-            buildInputs = [ pkgs.openssl ];
+            buildInputs = [ pkgs.openssl pkgs.sqlite ];
             OPENSSL_NO_VENDOR = "1";
           };
           nativeBuildInputs = commonNative;
-          buildInputs = [ pkgs.openssl ];
+          buildInputs = [ pkgs.openssl pkgs.sqlite ];
           OPENSSL_NO_VENDOR = "1";
           CARGO_TERM_COLOR = "always";
           RUST_LOG = "info,track_crawler=debug,reqwest=warn";

@@ -10,6 +10,10 @@ While ids are fetched, they are enqueued and a different process within the craw
 
 Features are pulled from acousticbrainz high and low level features as well as lastfm's toptags for each song. A large number of features are pulled with an emphasis on quantity
 
+The crawler as of now has pulled ~5k songs each with ~2.2k features. This represents the raw data matrix and will be processed through unsupervised learning methods to determine a managable reduced feature space. 
+
 ## py-processor 
 
-TODO: This service's goal is to implement all python scripts that pre-process data in some way 
+The following source python source files define scripts for processing raw data: 
++`matrix.py`: Pivots raw json into a `.parquet` numeric table of features per song 
++`RF-PCA.py`: Script that embeds data using the Random Forest algorithm, then performs randomized PCA to reduce feature space down to 32-128 features.  

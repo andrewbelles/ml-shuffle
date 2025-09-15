@@ -1,0 +1,12 @@
+numpy 
+pandas 
+pyarrow 
+fastparquet 
+scikit-learn
+scipy
+tensorflow
+matplotlib
+ipykernel    # If I use any notebooks for some reason 
+zstandard 
+tqdm 
+rich 
