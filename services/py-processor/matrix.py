@@ -97,7 +97,7 @@ def spotify_raw(path: str) -> pd.DataFrame:
 
 def numeric_from_raw(root: str | Path, rel: pd.DataFrame) -> pd.DataFrame:
     root = Path(root) 
-    cols = ["track_id", "duration_ms", "popularity", "explicit"]
+    cols = [ "track_id" ]
 
     if rel.empty:
         return pd.DataFrame(
@@ -115,24 +115,10 @@ def numeric_from_raw(root: str | Path, rel: pd.DataFrame) -> pd.DataFrame:
             with open(p, "rb") as fptr: 
                 comp = zstd.ZstdDecompressor()
                 data = comp.decompress(fptr.read())
-            obj = json.loads(data)
         except Exception as _: 
             continue 
 
-        duration_ms = obj.get("duration_ms", None)
-        popularity  = obj.get("popularity", None)
-        explicit    = obj.get("explicit", None)
-
-        rows.append(
-            {
-                "track_id": row.track_id,
-                "duration_ms": (float(duration_ms) 
-                                if duration_ms is not None else np.nan), 
-                "popularity": float(popularity) if popularity is not None else np.nan, 
-                "explicit": (1.0 if explicit else 
-                             0.0 if explicit is not None else np.nan), 
-            }
-        )
+        rows.append({ "track_id": row.track_id })
 
     data = (pd.DataFrame.from_records(rows, columns=cols)
         .drop_duplicates(subset=["track_id"])
