@@ -16,6 +16,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn.decomposition import TruncatedSVD 
 from sklearn.inspection import permutation_importance
 from scipy import sparse 
+from joblib import parallel_backend
 
 BATCH_SIZE: int = 256 
 rng  = np.random.default_rng(0)
@@ -136,18 +137,32 @@ class Model():
         return {"oob_score": oob, "test_auc": auc}
 
 
-    def reduce(self):
+    def reduce(self, pool=200, rows=3000, n_repeats=5):
+        if self.rf_ is None: 
+            self.rf_train() 
 
-        rf = self.rf_train() 
-        important = permutation_importance(rf, self.test, self.test_labels, 
-                                           n_repeats=5, scoring="roc_auc", n_jobs=-1, 
-                                           random_state=SEED)
-        cols = np.array(self.test.columns)
-        order = np.argsort(important.importances_mean)[::-1]
-        perm = list(zip(cols[oder][:30],
-                        important.importances_mean[order][:30],
-                        important.importances_std[order][:30]))
-        return {"permutation_top": perm}
+        names = self.rf_.feature_names_in_
+        mdi_order = np.argsort(self.rf_.feature_importances_)[::-1]
+        keep_idx = mdi_order[:min(pool, len(names))]
+        keep = names[keep_idx]
+
+        rng = np.random.default_rng(0)
+        idx = rng.choice(len(self.test), size=min(rows, len(self.test)), replace=False)
+        train_eval = self.test.loc[self.test.index[idx], names].copy()
+        label_eval = self.test_labels[idx]
+
+        with parallel_backend("threading"):
+            pi = permutation_importance(
+                self.rf_, train_eval, label_eval, 
+                scoring="roc_auc",
+                n_jobs=-1, random_state=SEED
+            )
+
+        order = np.argsort(pi.importances_mean)[::-1]
+        top = [(keep[i], float(pi.importances_mean[i]), float(pi.importances_std[i]))
+               for i in order[:30]] 
+
+        return { "permutation_top": top }
 
 def main():
     parser = argparse.ArgumentParser() 
@@ -155,9 +170,6 @@ def main():
 
     args  = parser.parse_args()
     model = Model(args.path)
-
-    _ = model.rf_train()
-    print(model.rf_eval())
 
     print(model.reduce())
 
