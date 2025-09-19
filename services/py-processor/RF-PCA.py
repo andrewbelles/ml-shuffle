@@ -7,16 +7,15 @@
 # 
 
 import argparse
-from math import perm 
 import pandas as pd 
 import numpy as np 
+import matplotlib.pyplot as plt 
+
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier 
 from sklearn.metrics import roc_auc_score 
-from sklearn.decomposition import TruncatedSVD 
-from sklearn.inspection import permutation_importance
-from scipy import sparse 
-from joblib import parallel_backend
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA 
 
 BATCH_SIZE: int = 256 
 rng  = np.random.default_rng(0)
@@ -75,6 +74,7 @@ class Model():
             random_state=rng
         )
 
+        self.real  = train_real 
         self.train = pd.concat([train_real, train_noise], ignore_index=True)
         self.train_labels = np.concatenate(
             [np.ones(len(train_real)), 
@@ -137,32 +137,71 @@ class Model():
         return {"oob_score": oob, "test_auc": auc}
 
 
-    def reduce(self, pool=200, rows=3000, n_repeats=5):
+    def reduce(self):
         if self.rf_ is None: 
             self.rf_train() 
 
-        names = self.rf_.feature_names_in_
-        mdi_order = np.argsort(self.rf_.feature_importances_)[::-1]
-        keep_idx = mdi_order[:min(pool, len(names))]
-        keep = names[keep_idx]
+        importances = self.rf_.feature_importances_
+        feature_names = self.rf_.feature_names_in_ 
+        features = pd.DataFrame({"Feature": feature_names, "Importance": importances})
 
-        rng = np.random.default_rng(0)
-        idx = rng.choice(len(self.test), size=min(rows, len(self.test)), replace=False)
-        train_eval = self.test.loc[self.test.index[idx], names].copy()
-        label_eval = self.test_labels[idx]
+        features = features.sort_values(by='Importance', ascending=False)
+        top_features = features['Feature'][:512].values
 
-        with parallel_backend("threading"):
-            pi = permutation_importance(
-                self.rf_, train_eval, label_eval, 
-                scoring="roc_auc",
-                n_jobs=-1, random_state=SEED
-            )
+        # Dataset to perform randomized PCA upon 
+        scaler = StandardScaler(with_mean=True, with_std=True)
+        X = self.real[top_features].to_numpy(dtype=np.float32)
+        Z = scaler.fit_transform(X)
+        self.pca = PCA(n_components=512, svd_solver='randomized', random_state=SEED) 
 
-        order = np.argsort(pi.importances_mean)[::-1]
-        top = [(keep[i], float(pi.importances_mean[i]), float(pi.importances_std[i]))
-               for i in order[:30]] 
+        _ = self.pca.fit_transform(Z) 
 
-        return { "permutation_top": top }
+        # Ensure data has real structure
+        eigenvalues = self.pca.explained_variance_ 
+        norm_ev     = self.pca.explained_variance_ratio_
+        cumulative  = np.cumsum(norm_ev)
+
+        col_ct = Z.shape[1]
+        harmonic = np.cumsum(1.0 / np.arange(1, col_ct+1)[::-1])[::-1] / col_ct 
+        bs = harmonic[:512] # Broken stick expectation 
+
+        k_var = int(np.searchsorted(cumulative, 0.95) + 1)
+        k_var = min(k_var, 512)
+        below = np.where(norm_ev < bs)[0]
+
+        k_mark = 64
+
+        n = np.arange(1, 513)
+        _, ax = plt.subplots(1, 2)
+        ax[0].plot(n[n <= k_mark], eigenvalues[:k_mark], marker="o", linestyle="-",
+                   label=f"PC 1-{k_mark}", color="tab:orange") 
+        ax[0].plot(n[n > k_mark], eigenvalues[k_mark:], marker="o", linestyle="-",
+                   label=f"PC {k_mark+1}-512", color="tab:blue")
+        ax[0].axvline(k_mark, color="gray", linestyle=":", alpha=0.8)
+        ax[0].set_xlabel("Component")
+        ax[0].set_ylabel("Eigenvalue")
+        ax[0].legend(loc="best")
+
+        ax2 = ax[0].twinx()
+        ax2.plot(n, norm_ev, linestyle="--")
+        ax2.plot(n, bs, linestyle=":", alpha=0.8)
+        ax2.set_ylabel("explained variance ratio / broken-stick expectation")
+
+        ax[1].plot(n[n <= k_mark], cumulative[:k_mark], marker="o", color="tab:orange",
+                   label=f"cumulative EVR (1-{k_mark})")
+        ax[1].plot(n[n > k_mark], cumulative[k_mark:], marker="o", color="tab:blue", 
+                   label=f"cumulative EVR ({k_mark+1}-(512)")
+        ax[1].axhline(0.95, color="gray", linestyle=":")
+        ax[1].axvline(k_var, color="gray", linestyle=":")
+        ax[1].set_ylim(0, 1.01)
+        ax[1].set_xlabel("Component")
+        ax[1].set_ylabel("Cumulative explained variance")
+        plt.title("PCA Results + Check against Broken-stick Expectation")
+        plt.tight_layout()
+        
+        plt.savefig('pca_graph.png')
+        plt.close() 
+
 
 def main():
     parser = argparse.ArgumentParser() 
@@ -171,7 +210,7 @@ def main():
     args  = parser.parse_args()
     model = Model(args.path)
 
-    print(model.reduce())
+    model.reduce()
 
 if __name__ == "__main__":
     main()
