@@ -562,21 +562,62 @@ impl Crawler {
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
-        let mut count = 0; 
+
+        let pending_now = match self.db.count_jobs(
+            JobType::Link, 
+            JobStatus::Pending
+        ).await {
+            Ok(value) => value, 
+            Err(e) => {
+                error!(error = ?e, "count_jobs failed in insert_tracks");
+                0 
+            }
+        };
+
+        let mut headroom = (800 - pending_now).max(0);
+        let mut enqueued_links = 0_usize;
+        let mut considered = 0_usize;
+
         for track in tracks {
             if track.is_null() {
                 continue; 
             }
+            considered += 1; 
 
             let spotify_track = persistent::SpotifyTrack::new(&track);
+            
+            if let Some(popularity) = spotify_track.popularity {
+                if popularity < 35 {
+                    debug!(popularity = popularity, 
+                        "skipping track below popularity filter");
+                    continue; 
+                }
+            } else {
+                debug!("skipping track with missing popularity");
+                continue; 
+            }
+
+            if headroom <= 0 {
+                debug!("pending headroom exhausteed; stopping batch early");
+                break; 
+            }
+
             match self.db.ensure_track(&spotify_track).await {
                 Ok(track_id) => {
-                    count += 1; 
-                    debug!(
-                        track = %track_id, 
-                        title = %spotify_track.title,
-                        "track ensured in db"
-                    );
+                    match self.db.get_track_metadata(&track_id).await {
+                        Ok(Some(meta)) => {
+                            if !meta.linked_ok {
+                                headroom -= 1; 
+                                enqueued_links += 1; 
+                            }
+                        }
+                        _ => { 
+                            headroom -= 1; 
+                            enqueued_links += 1; 
+                        }
+                    }
+                    debug!(track = %track_id, popularity = ?spotify_track.popularity,
+                        "track ensured in db");
                 },
                 Err(e) => {
                     error!(error = ?e, track = ?spotify_track.spotify_id,
@@ -609,9 +650,12 @@ impl Crawler {
             }
         }
 
-        if count > 0 {
-            info!("feed.added {} new tracks from Spotify", count);
+        if enqueued_links > 0 {
+            info!(considered, enqueued_links, "feed.adding pending link jobs");
+        } else {
+            debug!(considered, "feed.batch yielded no new pending link jobs");
         }
+
         true 
     }
 
